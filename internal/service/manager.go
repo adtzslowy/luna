@@ -184,8 +184,71 @@ func (m *Manager) Status(name string) ServiceStatus {
 	return status
 }
 
-func (m *Manager) StatusAll() []ServiceStatus {
+func (m *Manager) Stop(name string) error {
+	svc, ok := m.cfg.Services[name]
+	if !ok {
+		return fmt.Errorf("unknown service: %s", name)
+	}
 
+	status := m.Status(name)
+	if status.State == StateStopped {
+		return fmt.Errorf("%s is not running", svc.Name)
+	}
+
+	// Deteksi Homebrew binary dan stop via brew services
+	if isHomebrewBinary(svc.BinaryPath) {
+		return stopViaHomebrew(name, svc.BinaryPath)
+	}
+
+	if status.PID > 0 {
+		if err := process.KillPid(status.PID); err != nil {
+			return fmt.Errorf("failed to stop %s: %w", svc.Name, err)
+		}
+	} else {
+		binName := filepath.Base(svc.BinaryPath)
+		pids, err := process.FindProcessByName(binName)
+		if err != nil || len(pids) == 0 {
+			return fmt.Errorf("cannot find %s process to stop", svc.Name)
+		}
+		for _, pid := range pids {
+			process.KillPid(pid)
+		}
+	}
+
+	if svc.PidFile != "" {
+		os.Remove(svc.PidFile)
+	}
+
+	delete(m.cmds, name)
+	return nil
+}
+
+func isHomebrewBinary(binaryPath string) bool {
+	return strings.Contains(binaryPath, "/opt/homebrew/") ||
+		strings.Contains(binaryPath, "/usr/local/opt/")
+}
+
+func stopViaHomebrew(name, binaryPath string) error {
+	// Extract service name dari path
+	// e.g. /usr/local/opt/postgresql@16/bin/postgres → postgresql@16
+	brewSvc := ""
+	if strings.Contains(binaryPath, "postgresql") {
+		brewSvc = "postgresql@16"
+	} else if strings.Contains(binaryPath, "mysql") {
+		brewSvc = "mysql"
+	}
+
+	if brewSvc == "" {
+		return fmt.Errorf("cannot determine homebrew service name for %s", name)
+	}
+
+	cmd := exec.Command("brew", "services", "stop", brewSvc)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func (m *Manager) StatusAll() []ServiceStatus {
 	order := []string{"caddy", "php", "postgresql", "mysql"}
 	var statuses []ServiceStatus
 
