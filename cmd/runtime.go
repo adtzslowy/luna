@@ -130,7 +130,10 @@ func cmdStop(mgr *service.Manager, args []string) {
 func cmdRestart(mgr *service.Manager, args []string) {
 	if len(args) == 0 || args[0] == "all" {
 		ui.PrintHeader("Restarting all services")
-		mgr.StopAll()
+		stopErrs := mgr.StopAll()
+		for _, e := range stopErrs {
+			ui.PrintWarn(e.Error())
+		}
 		errs := mgr.StartAll()
 		printServiceResults(mgr, errs)
 		return
@@ -238,13 +241,14 @@ func printHelp() {
 	fmt.Println(ui.Bold_("SERVICES"))
 	fmt.Printf("  %-12s Caddy web server    (port 80)\n", "caddy")
 	fmt.Printf("  %-12s PostgreSQL          (port 5432)\n", "postgresql")
+	fmt.Printf("  %-12s MySQL               (port 3306)\n", "mysql")
 	fmt.Printf("  %-12s PHP-FPM             (port 9000)\n", "php")
-	fmt.Printf("  %-12s PHP             (port 9000)\n", "php")
 	fmt.Println()
 	fmt.Println(ui.Bold_("EXAMPLES"))
-	fmt.Println("  luna install          # install semua (caddy + postgresql + php + adminer)")
-	fmt.Println("  luna install caddy    # install hanya Caddy")
-	fmt.Println("  luna install mysql    # install PostgreSQL")
+	fmt.Println("  luna install              # install semua (caddy + postgresql + mysql + php + adminer)")
+	fmt.Println("  luna install caddy        # install hanya Caddy")
+	fmt.Println("  luna install postgresql   # install PostgreSQL")
+	fmt.Println("  luna install mysql        # install MySQL")
 	fmt.Println("  luna install php      # install PHP-FPM")
 	fmt.Println("  luna install php-cli      # install PHP CLI")
 	fmt.Println("  luna install adminer  # install Adminer")
@@ -296,9 +300,18 @@ func cmdInstall(args []string) {
 		}
 		fmt.Println()
 		ui.PrintSuccess("Caddy installed!")
+	case "postgresql", "postgres", "pgsql":
+		ui.PrintHeader("Installing PostgreSQL")
+		if err := install.InstallPostgreSQL(onProgress); err != nil {
+			fmt.Println()
+			ui.PrintError(err.Error())
+			os.Exit(1)
+		}
+		fmt.Println()
+		ui.PrintSuccess("PostgreSQL installed!")
 	case "mysql":
 		ui.PrintHeader("Installing MySQL")
-		if err := install.InstallPostgreSQL(onProgress); err != nil {
+		if err := install.InstallMySQL(onProgress); err != nil {
 			fmt.Println()
 			ui.PrintError(err.Error())
 			os.Exit(1)
@@ -335,9 +348,19 @@ func cmdInstall(args []string) {
 		fmt.Println()
 		ui.PrintSuccess("Adminer installed!")
 		ui.PrintInfo("Access at http://localhost/adminer/")
+	case "lunabase", "db":
+		ui.PrintHeader("Installing LunaBase")
+		if err := install.InstallLunaBase(); err != nil {
+			fmt.Println()
+			ui.PrintError(err.Error())
+			os.Exit(1)
+		}
+		fmt.Println()
+		ui.PrintSuccess("LunaBase installed!")
+		ui.PrintInfo("Access at http://localhost/lunabase/")
 	default:
 		ui.PrintError(fmt.Sprintf("Unknown service: %s", name))
-		ui.PrintInfo("Available: caddy, mysql, all")
+		ui.PrintInfo("Available: caddy, postgresql, mysql, php, php-cli, adminer, lunabase, all")
 		os.Exit(1)
 	}
 }

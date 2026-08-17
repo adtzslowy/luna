@@ -93,7 +93,16 @@ func binExe(name string) string {
 }
 
 func BaseDir() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(os.TempDir(), ".luna")
+	}
+	if runtime.GOOS == "windows" {
+		localAppData := os.Getenv("LOCALAPPDATA")
+		if localAppData != "" {
+			return filepath.Join(localAppData, "Luna")
+		}
+	}
 	return filepath.Join(home, ".luna")
 }
 

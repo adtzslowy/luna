@@ -95,7 +95,7 @@ func installPostgreSQLHomebrew() error {
 	}
 
 	fmt.Println("  → Initializing data directory...")
-	dataDir = filepath.Join(config.BaseDir(), "mysql", "data")
+	dataDir = filepath.Join(config.BaseDir(), "postgresql", "data")
 	os.MkdirAll(dataDir, 0755)
 
 	initdb := filepath.Join(pgPath, "initdb")
@@ -112,13 +112,16 @@ func installPostgreSQLHomebrew() error {
 }
 
 func findHomebrewPostgres() string {
-	// Cek Intel Mac path
 	candidates := []string{
+		// macOS Intel
 		"/usr/local/opt/postgresql@16/bin",
 		"/usr/local/opt/postgresql/bin",
-		// Apple Silicon path (untuk referensi)
+		// macOS Apple Silicon
 		"/opt/homebrew/opt/postgresql@16/bin",
 		"/opt/homebrew/opt/postgresql/bin",
+		// Linuxbrew
+		"/home/linuxbrew/.linuxbrew/opt/postgresql@16/bin",
+		"/home/linuxbrew/.linuxbrew/opt/postgresql/bin",
 	}
 	for _, p := range candidates {
 		if _, err := os.Stat(filepath.Join(p, "initdb")); err == nil {
@@ -133,7 +136,7 @@ func updateBrewBinaryPath(binDir string) {
 	if err != nil {
 		return
 	}
-	if svc, ok := cfg.Services["mysql"]; ok {
+	if svc, ok := cfg.Services["postgresql"]; ok {
 		svc.BinaryPath = filepath.Join(binDir, "postgres")
 		cfg.Save()
 	}

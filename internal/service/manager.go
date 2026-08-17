@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,14 +31,16 @@ type ServiceStatus struct {
 }
 
 type Manager struct {
-	cfg  *config.Config
-	cmds map[string]*exec.Cmd
+	cfg      *config.Config
+	cmds     map[string]*exec.Cmd
+	logFiles map[string]*os.File
 }
 
 func NewManager(cfg *config.Config) *Manager {
 	return &Manager{
-		cfg:  cfg,
-		cmds: make(map[string]*exec.Cmd),
+		cfg:      cfg,
+		cmds:     make(map[string]*exec.Cmd),
+		logFiles: make(map[string]*os.File),
 	}
 }
 
@@ -68,6 +71,7 @@ func (m *Manager) Start(name string) error {
 		if err == nil {
 			cmd.Stdout = lf
 			cmd.Stderr = lf
+			m.logFiles[name] = lf
 		}
 	}
 
@@ -139,9 +143,6 @@ func (m *Manager) Status(name string) ServiceStatus {
 	}
 
 	status.PortOpen = process.IsPortOpen(svc.Port)
-	if status.State == StateStopped && status.PortOpen {
-		status.State = StateRunning
-	}
 
 	return status
 }
@@ -181,25 +182,26 @@ func (m *Manager) Stop(name string) error {
 		os.Remove(svc.PidFile)
 	}
 
+	if lf, ok := m.logFiles[name]; ok {
+		lf.Close()
+		delete(m.logFiles, name)
+	}
+
 	delete(m.cmds, name)
 	return nil
 }
 
 func isHomebrewBinary(binaryPath string) bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
 	return strings.Contains(binaryPath, "/opt/homebrew/") ||
-		strings.Contains(binaryPath, "/usr/local/opt/")
+		strings.Contains(binaryPath, "/usr/local/opt/") ||
+		strings.Contains(binaryPath, "/home/linuxbrew/.linuxbrew/opt/")
 }
 
 func stopViaHomebrew(name, binaryPath string) error {
-	// Extract service name dari path
-	// e.g. /usr/local/opt/postgresql@16/bin/postgres → postgresql@16
-	brewSvc := ""
-	if strings.Contains(binaryPath, "postgresql") {
-		brewSvc = "postgresql@16"
-	} else if strings.Contains(binaryPath, "mysql") {
-		brewSvc = "mysql"
-	}
-
+	brewSvc := detectBrewService(binaryPath)
 	if brewSvc == "" {
 		return fmt.Errorf("cannot determine homebrew service name for %s", name)
 	}
@@ -208,6 +210,23 @@ func stopViaHomebrew(name, binaryPath string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func detectBrewService(binaryPath string) string {
+	if strings.Contains(binaryPath, "postgresql") {
+		if idx := strings.Index(binaryPath, "postgresql@"); idx >= 0 {
+			end := idx + len("postgresql@")
+			for end < len(binaryPath) && binaryPath[end] >= '0' && binaryPath[end] <= '9' {
+				end++
+			}
+			return binaryPath[idx:end]
+		}
+		return "postgresql"
+	}
+	if strings.Contains(binaryPath, "mysql") {
+		return "mysql"
+	}
+	return ""
 }
 
 func (m *Manager) StatusAll() []ServiceStatus {

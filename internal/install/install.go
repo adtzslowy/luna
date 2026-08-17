@@ -453,7 +453,29 @@ func InstallLunaBase() error {
 	}
 
 	fmt.Println("  → Installing LunaBase...")
-	fmt.Printf("  → Copy index.php ke %s\n", destDir)
+
+	entries, _ := lunabaseFS.ReadDir("lunabase-web")
+	for _, entry := range entries {
+		if entry.IsDir() {
+			subEntries, _ := lunabaseFS.ReadDir("lunabase-web/" + entry.Name())
+			os.MkdirAll(filepath.Join(destDir, entry.Name()), 0755)
+			for _, sub := range subEntries {
+				data, err := lunabaseFS.ReadFile("lunabase-web/" + entry.Name() + "/" + sub.Name())
+				if err != nil {
+					continue
+				}
+				os.WriteFile(filepath.Join(destDir, entry.Name(), sub.Name()), data, 0644)
+			}
+			continue
+		}
+		data, err := lunabaseFS.ReadFile("lunabase-web/" + entry.Name())
+		if err != nil {
+			continue
+		}
+		os.WriteFile(filepath.Join(destDir, entry.Name()), data, 0644)
+	}
+
+	fmt.Printf("  → LunaBase installed at %s\n", destDir)
 	fmt.Println("  → LunaBase siap di http://localhost/lunabase/")
 	return nil
 }
@@ -683,7 +705,7 @@ func writeCaddyfile(caddyDir, baseDir string) error {
 		output file %s
 	}
 }
-`, wwwDir, filepath.Join(caddyDir, "caddy.log"))
+`, filepath.ToSlash(wwwDir), filepath.ToSlash(filepath.Join(caddyDir, "caddy.log")))
 
 	return os.WriteFile(filepath.Join(caddyDir, "Caddyfile"), []byte(caddyfile), 0644)
 }
@@ -699,18 +721,21 @@ datadir=%s
 port=3306
 pid-file=%s
 log-error=%s
-socket=%s
-
-innodb_buffer_pool_size=128M
-max_connections=50
 `,
-		mysqlDir,
-		dataDir,
-		filepath.Join(dataDir, "mysql.pid"),
-		filepath.Join(dataDir, "mysql-error.log"),
-		filepath.Join(mysqlDir, "mysql.sock"),
+		filepath.ToSlash(mysqlDir),
+		filepath.ToSlash(dataDir),
+		filepath.ToSlash(filepath.Join(dataDir, "mysql.pid")),
+		filepath.ToSlash(filepath.Join(dataDir, "mysql-error.log")),
 	)
 
+	if runtime.GOOS != "windows" {
+		conf += fmt.Sprintf("socket=%s\n", filepath.ToSlash(filepath.Join(mysqlDir, "mysql.sock")))
+	}
+
+	conf += `
+innodb_buffer_pool_size=128M
+max_connections=50
+`
 	return os.WriteFile(filepath.Join(mysqlDir, "my.cnf"), []byte(conf), 0644)
 }
 

@@ -32,35 +32,28 @@ type postgresRelease struct {
 }
 
 func FetchCaddyLatest() (string, string, error) {
-	req, err := http.NewRequest("GET", githubCaddyAPI, nil)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("https://github.com/caddyserver/caddy/releases/latest")
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to reach GitHub: %w", err)
 	}
-	req.Header.Set("User-Agent", "luna-dev-manager")
-	req.Header.Set("Accept", "application/vnd.github+json")
+	resp.Body.Close()
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to reach GitHub API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return "", "", fmt.Errorf("no redirect from GitHub releases page")
 	}
 
-	var release githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", "", fmt.Errorf("failed to parse Github response: %w", err)
-	}
-	version := strings.TrimPrefix(release.TagName, "v")
+	// location: https://github.com/caddyserver/caddy/releases/tag/v2.9.1
+	parts := strings.Split(location, "/")
+	tag := parts[len(parts)-1]
+	version := strings.TrimPrefix(tag, "v")
 
-	fmt.Println("   [debug] available assets:")
-	for _, a := range release.Assets {
-		fmt.Printf("     - %s\n", a.Name)
-	}
-
-	url, err := findCaddyAsset(release.Assets, version)
+	url, err := buildCaddyURL(version)
 	if err != nil {
 		return "", "", err
 	}
@@ -68,7 +61,7 @@ func FetchCaddyLatest() (string, string, error) {
 	return version, url, nil
 }
 
-func findCaddyAsset(assets []githubAsset, version string) (string, error) {
+func buildCaddyURL(version string) (string, error) {
 	os_ := runtime.GOOS
 	arch := runtime.GOARCH
 
@@ -77,7 +70,6 @@ func findCaddyAsset(assets []githubAsset, version string) (string, error) {
 		"linux":   "linux",
 		"windows": "windows",
 	}
-
 	o, ok := osMap[os_]
 	if !ok {
 		return "", fmt.Errorf("unsupported OS: %s", os_)
@@ -99,29 +91,8 @@ func findCaddyAsset(assets []githubAsset, version string) (string, error) {
 		ext = "zip"
 	}
 
-	target := fmt.Sprintf("caddy_%s_%s_%s.%s", version, o, a, ext)
-
-	for _, asset := range assets {
-		if asset.Name == target {
-			return asset.BrowserDownloadURL, nil
-		}
-	}
-
-	for _, asset := range assets {
-		name := asset.Name
-		if strings.Contains(name, os_) &&
-			strings.Contains(name, a) &&
-			strings.HasSuffix(name, ext) &&
-			!strings.Contains(name, ".sha") &&
-			!strings.Contains(name, ".sig") {
-			return asset.BrowserDownloadURL, nil
-		}
-	}
-
-	return "", fmt.Errorf(
-		"no asset found for %s/%s\nlooking for: %s\ncheck https://github.com/caddyserver/caddy/releases/latest",
-		os_, arch, target,
-	)
+	filename := fmt.Sprintf("caddy_%s_%s_%s.%s", version, o, a, ext)
+	return fmt.Sprintf("https://github.com/caddyserver/caddy/releases/download/v%s/%s", version, filename), nil
 }
 
 func FetchPostgreSQLLatest() (string, string, error) {
@@ -150,12 +121,6 @@ func FetchPostgreSQLLatest() (string, string, error) {
 }
 
 func findPostgresAsset(assets []githubAsset, version string) (string, error) {
-	for _, a := range assets {
-		if strings.Contains(a.Name, "darwin") || strings.Contains(a.Name, "apple") {
-			fmt.Printf("  [debug] %s\n", a.Name)
-		}
-	}
-
 	tripleMap := map[string]map[string]string{
 		"darwin": {
 			"amd64": "x86_64-apple-darwin",
@@ -240,7 +205,10 @@ func buildPHPURL() (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read PHP index: %w", err)
+	}
 	content := string(body)
 
 	ext := "tar.gz"
@@ -254,8 +222,8 @@ func buildPHPURL() (string, error) {
 	latest := ""
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
-		if strings.Contains(line, suffix) && strings.Contains(line, "php-8.") {
-			start := strings.Index(line, "php-8.")
+		if strings.Contains(line, suffix) && strings.Contains(line, "php-8.4.") {
+			start := strings.Index(line, "php-8.4.")
 			if start < 0 {
 				continue
 			}
@@ -271,7 +239,6 @@ func buildPHPURL() (string, error) {
 	}
 
 	if latest == "" {
-		// Fallback ke URL yang kita construct manual dengan versi known
 		latest = fmt.Sprintf("php-8.4.0-fpm-%s-%s.%s", osName, archName, ext)
 	}
 
@@ -322,15 +289,18 @@ func buildPHPCLIURL() (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read PHP CLI index: %w", err)
+	}
 	content := string(body)
 
 	suffix := fmt.Sprintf("-cli-%s-%s.%s", osName, archName, ext)
 
 	latest := ""
 	for _, line := range strings.Split(content, "\n") {
-		if strings.Contains(line, suffix) && strings.Contains(line, "php-8.") {
-			start := strings.Index(line, "php-8.")
+		if strings.Contains(line, suffix) && strings.Contains(line, "php-8.4.") {
+			start := strings.Index(line, "php-8.4.")
 			if start < 0 {
 				continue
 			}
@@ -355,16 +325,24 @@ func buildPHPCLIURL() (string, error) {
 func MySQLDownloadUrl() (string, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		return "", fmt.Errorf("Homebrew")
+		return "", fmt.Errorf("MySQL on macOS requires Homebrew: brew install mysql")
 	case "windows":
+		arch := "winx64"
+		if runtime.GOARCH == "arm64" {
+			arch = "winx64"
+		}
 		return fmt.Sprintf(
-			"https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-%s-winx64.zip",
-			MySQLVersion,
+			"https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-%s-%s.zip",
+			MySQLVersion, arch,
 		), nil
 	default:
+		arch := "linux-glibc2.28-x86_64"
+		if runtime.GOARCH == "arm64" {
+			arch = "linux-glibc2.28-aarch64"
+		}
 		return fmt.Sprintf(
-			"https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-%s-linux-glibc2.28-x86_64.tar.xz",
-			MySQLVersion,
+			"https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-%s-%s.tar.xz",
+			MySQLVersion, arch,
 		), nil
 	}
 }
